@@ -1,0 +1,98 @@
+# Terraform State Files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform Directory
+.terraform/
+.terraform.lock.hcl
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Terraform variable files (contain sensitive data)
+terraform.tfvars
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Exception: Allow example files
+!terraform.tfvars.example
+!*.example.tfvars
+
+# Backend configuration (contains sensitive bucket/dynamodb info)
+backend.hcl
+backend.tf.json
+
+# SSH Keys and Certificates
+*.pem
+*.key
+*.pub
+id_rsa*
+*.ppk
+
+# AWS Credentials
+*.credentials
+.aws/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE and Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Terraform Override Files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform Plan Files
+*.tfplan
+*.tfplan.*
+plan.out
+
+# Terraform Module Cache
+.terraform.d/
+
+# Terraform Plugin Cache
+.terraformrc
+terraform.rc
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+temp/
+tmp/
+
+# Test files (if using Terratest or similar)
+*.test
+go.sum
+vendor/
+
+# Security scanner results
+.tfsec/
+trivy-results.json
+checkov-results.json
+
+# Documentation build artifacts
+docs/_build/
+site/
+
+# OS specific
+Thumbs.db
+.Spotlight-V100
+.Trashes
