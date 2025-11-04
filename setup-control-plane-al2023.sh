@@ -392,19 +392,44 @@ install_calico() {
     
     # Wait for Calico CRDs to be ready
     info "Waiting for Calico CRDs to be installed..."
-    local crd_attempts=30
+    local crd_attempts=60
     local crd_attempt=1
-    
+
+    # First, wait for CRD to exist
     while [[ $crd_attempt -le $crd_attempts ]]; do
         if kubectl get crd installations.operator.tigera.io &>/dev/null; then
-            log "Calico CRDs are ready"
+            log "Calico CRD exists, waiting for it to be established..."
             break
         fi
-        info "Waiting for CRDs... ($crd_attempt/$crd_attempts)"
-        sleep 10
+        info "Waiting for CRD to exist... ($crd_attempt/$crd_attempts)"
+        sleep 5
         ((crd_attempt++))
         if [[ $crd_attempt -gt $crd_attempts ]]; then
             error "Calico CRDs failed to install"
+        fi
+    done
+
+    # Now wait for CRD to be established and ready to accept custom resources
+    info "Waiting for CRD to be established with API server..."
+    if ! kubectl wait --for condition=established --timeout=300s crd/installations.operator.tigera.io; then
+        error "CRD installations.operator.tigera.io failed to become established"
+    fi
+
+    # Additional safety: ensure API server has fully registered the resource
+    info "Verifying API server can list Installation resources..."
+    local api_attempts=30
+    local api_attempt=1
+
+    while [[ $api_attempt -le $api_attempts ]]; do
+        if kubectl api-resources | grep -q "installations.*operator.tigera.io"; then
+            log "Calico CRDs are fully ready"
+            break
+        fi
+        info "Waiting for API server to register Installation resource... ($api_attempt/$api_attempts)"
+        sleep 2
+        ((api_attempt++))
+        if [[ $api_attempt -gt $api_attempts ]]; then
+            error "API server failed to register Installation resource"
         fi
     done
     

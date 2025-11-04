@@ -218,7 +218,7 @@ get_terraform_outputs() {
     local key_name=$(cd "$TERRAFORM_DIR" && terraform output -raw key_pair_name 2>/dev/null)
     if [ -z "$key_name" ]; then
         warn "Could not retrieve key pair name from Terraform output"
-        key_name="k8s-cluster"
+        key_name="k8-cluster"
     fi
 
     # Auto-detect SSH key location

@@ -114,15 +114,22 @@ set_hostname() {
     log "Setting hostname for worker node..."
 
     # Try to get worker number from AWS instance name tag or use last octet of IP
-    PRIVATE_IP=$(hostname -I | awk '{print $1}')
+    # Use ip command as fallback since hostname -I may not work reliably on AL2023
+    PRIVATE_IP=$(ip addr show | grep -E "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | head -1)
+
+    if [ -z "$PRIVATE_IP" ]; then
+        warn "Could not determine private IP, using fallback"
+        PRIVATE_IP="127.0.0.1"
+    fi
+
     LAST_OCTET=$(echo $PRIVATE_IP | cut -d'.' -f4)
 
     # Try to get instance name from AWS metadata
     INSTANCE_NAME=""
-    if command -v aws &> /dev/null; then
-        INSTANCE_ID=$(ec2-metadata --instance-id 2>/dev/null | cut -d' ' -f2)
-        if [ ! -z "$INSTANCE_ID" ]; then
-            INSTANCE_NAME=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Name" --query 'Tags[0].Value' --output text 2>/dev/null)
+    if command -v curl &> /dev/null; then
+        INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
+        if [ ! -z "$INSTANCE_ID" ] && command -v aws &> /dev/null; then
+            INSTANCE_NAME=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Name" --query 'Tags[0].Value' --output text 2>/dev/null || echo "")
         fi
     fi
 
@@ -139,8 +146,9 @@ set_hostname() {
     hostnamectl set-hostname "$HOSTNAME"
 
     # Update /etc/hosts with new hostname
-    # Remove old entries for this IP
-    sed -i "/$PRIVATE_IP/d" /etc/hosts
+    # Remove old entries for this IP (escape dots for sed)
+    PRIVATE_IP_ESCAPED=$(echo "$PRIVATE_IP" | sed 's/\./\\./g')
+    sed -i "/$PRIVATE_IP_ESCAPED/d" /etc/hosts
 
     # Add new entry
     echo "$PRIVATE_IP $HOSTNAME" >> /etc/hosts
@@ -262,17 +270,118 @@ EOF
 
 join_cluster() {
     log "Joining worker node to Kubernetes cluster..."
-    
-    # Execute the join command directly
-    eval "$JOIN_COMMAND"
-    
-    # Configure kubelet after join
+
+    # Pre-join diagnostics
+    log "Running pre-join diagnostics..."
+
+    # Extract API server address from join command
+    API_SERVER=$(echo "$JOIN_COMMAND" | grep -oP 'https://\K[^/]+' | head -1)
+    if [ -z "$API_SERVER" ]; then
+        warn "Could not extract API server from join command"
+    else
+        info "API Server: $API_SERVER"
+
+        # Test DNS resolution
+        info "Testing DNS resolution for API server..."
+        API_HOST="${API_SERVER%:*}"
+        if nslookup "$API_HOST" &>/dev/null; then
+            info "DNS resolution successful for $API_HOST"
+        else
+            warn "DNS resolution failed for $API_HOST - ensure /etc/resolv.conf is configured"
+        fi
+
+        # Test TCP connectivity to API server
+        info "Testing TCP connectivity to API server..."
+        API_PORT=${API_SERVER##*:}
+        if [ "$API_PORT" == "$API_SERVER" ]; then
+            API_PORT=6443
+        fi
+
+        if timeout 5 bash -c "echo >/dev/tcp/$API_HOST/$API_PORT" 2>/dev/null; then
+            info "Successfully connected to API server on $API_SERVER"
+        else
+            warn "Could not connect to API server on $API_SERVER:$API_PORT"
+            warn "Verify: 1) Security groups allow port $API_PORT from worker to control plane"
+            warn "        2) Control plane is running and accessible"
+            warn "        3) Network connectivity between worker and control plane"
+        fi
+    fi
+
+    # Wait for containerd to be fully ready
+    log "Waiting for containerd to be ready..."
+    for i in {1..30}; do
+        if systemctl is-active --quiet containerd; then
+            info "containerd is running"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            error "containerd failed to start after 30 seconds"
+        fi
+        sleep 1
+    done
+
+    # Ensure kubelet is configured before starting
+    log "Configuring kubelet..."
     cat <<EOF > /etc/default/kubelet
 KUBELET_EXTRA_ARGS=--cloud-provider=external
 EOF
-    
+
+    # Wait for kubelet to be ready
+    log "Starting and waiting for kubelet to be ready..."
+    systemctl enable kubelet
+    systemctl start kubelet
+
+    for i in {1..30}; do
+        if systemctl is-active --quiet kubelet; then
+            info "kubelet is running"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            error "kubelet failed to start after 30 seconds"
+        fi
+        sleep 1
+    done
+
+    # Give services time to stabilize
+    log "Allowing services to stabilize (10 seconds)..."
+    sleep 10
+
+    # Execute the join command with retry logic
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+    JOIN_SUCCESS=false
+
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        log "Executing kubeadm join (attempt $RETRY_COUNT/$MAX_RETRIES)..."
+
+        if eval "$JOIN_COMMAND"; then
+            info "kubeadm join command executed successfully"
+            JOIN_SUCCESS=true
+            break
+        else
+            EXIT_CODE=$?
+            warn "kubeadm join failed with exit code $EXIT_CODE"
+
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                warn "Retrying in 15 seconds (attempt $RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 15
+            fi
+        fi
+    done
+
+    if [ "$JOIN_SUCCESS" = false ]; then
+        error "Failed to join cluster after $MAX_RETRIES attempts. Run with --v=5 for detailed logs: kubeadm join ... --v=5"
+    fi
+
+    # Restart kubelet after successful join
+    log "Restarting kubelet after successful join..."
     systemctl restart kubelet
-    
+
+    # Wait for kubelet to stabilize after restart
+    log "Waiting for kubelet to stabilize..."
+    sleep 5
+
     log "Worker node successfully joined the cluster"
 }
 

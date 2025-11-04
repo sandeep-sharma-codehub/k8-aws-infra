@@ -23,7 +23,7 @@ echo -e "${BLUE}Diagnosing API server on $CONTROL_PLANE_IP${NC}"
 echo ""
 
 echo -e "${YELLOW}=== 1. Checking API Server Pod Status ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "API Server container status:"
 sudo crictl ps | grep apiserver || echo "API server container not running!"
 echo ""
@@ -34,7 +34,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 2. Checking System Resources ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "Memory usage:"
 free -h
 echo ""
@@ -49,7 +49,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 3. Checking Kubelet Status ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "Kubelet service status:"
 sudo systemctl status kubelet --no-pager | head -20
 echo ""
@@ -60,7 +60,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 4. Checking etcd Status ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "etcd container status:"
 sudo crictl ps | grep etcd || echo "etcd container not running!"
 echo ""
@@ -74,7 +74,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 5. Checking API Server Logs ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 if sudo crictl ps | grep -q apiserver; then
     API_CONTAINER=$(sudo crictl ps | grep apiserver | awk '{print $1}')
     echo "API server logs (last 50 lines):"
@@ -87,7 +87,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 6. Checking Static Pod Manifests ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "Static pod manifests:"
 ls -la /etc/kubernetes/manifests/ || echo "Manifests directory not found!"
 echo ""
@@ -101,7 +101,7 @@ echo ""
 ENDSSH
 
 echo -e "${YELLOW}=== 7. Checking Containerd Status ===${NC}"
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@$CONTROL_PLANE_IP << 'ENDSSH'
 echo "Containerd service status:"
 sudo systemctl status containerd --no-pager | head -10
 echo ""
