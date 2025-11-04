@@ -385,6 +385,281 @@ install_metrics_server() {
     log "Metrics Server installed"
 }
 
+install_ebs_csi_driver() {
+    log "Installing AWS EBS CSI Driver..."
+
+    # Install the EBS CSI Driver using the public manifests
+    # Note: This uses the IAM role attached to EC2 instances for AWS API access
+    kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.28"
+
+    # Wait for CSI driver pods to be ready
+    log "Waiting for EBS CSI Driver pods to be ready..."
+    kubectl wait --for=condition=ready pod -l app=ebs-csi-controller -n kube-system --timeout=300s || log "Warning: CSI controller pods might not be ready yet"
+    kubectl wait --for=condition=ready pod -l app=ebs-csi-node -n kube-system --timeout=300s || log "Warning: CSI node pods might not be ready yet"
+
+    log "AWS EBS CSI Driver installed"
+}
+
+create_storage_classes() {
+    log "Creating StorageClasses..."
+
+    # Create gp3 StorageClass (default, recommended for most workloads)
+    cat <<EOF | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+EOF
+
+    # Create gp2 StorageClass (for compatibility)
+    cat <<EOF | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp2
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp2
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+EOF
+
+    # Create io2 StorageClass (for high-performance workloads)
+    cat <<EOF | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-io2
+provisioner: ebs.csi.aws.com
+parameters:
+  type: io2
+  iops: "10000"
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+EOF
+
+    # Create sc1 StorageClass (for cold HDD - throughput optimized)
+    cat <<EOF | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-sc1
+provisioner: ebs.csi.aws.com
+parameters:
+  type: sc1
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+EOF
+
+    log "StorageClasses created (ebs-gp3 is default)"
+}
+
+create_storage_samples() {
+    log "Creating sample storage resources for CKA practice..."
+
+    # Create a namespace for storage examples
+    kubectl create namespace storage-examples || true
+
+    # Sample 1: Simple PVC with default StorageClass
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sample-pvc-default
+  namespace: storage-examples
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+EOF
+
+    # Sample 2: PVC with specific StorageClass (gp2)
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sample-pvc-gp2
+  namespace: storage-examples
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp2
+  resources:
+    requests:
+      storage: 10Gi
+EOF
+
+    # Sample 3: Pod using PVC with mount
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sample-pod-with-volume
+  namespace: storage-examples
+  labels:
+    app: sample-storage-app
+spec:
+  containers:
+  - name: app
+    image: nginx:latest
+    volumeMounts:
+    - name: persistent-storage
+      mountPath: /usr/share/nginx/html
+    ports:
+    - containerPort: 80
+  volumes:
+  - name: persistent-storage
+    persistentVolumeClaim:
+      claimName: sample-pvc-default
+EOF
+
+    # Sample 4: Deployment using PVC (for StatefulSet alternative)
+    cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-deployment-with-storage
+  namespace: storage-examples
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: storage-demo
+  template:
+    metadata:
+      labels:
+        app: storage-demo
+    spec:
+      containers:
+      - name: web
+        image: nginx:latest
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        ports:
+        - containerPort: 80
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sample-pvc-gp2
+EOF
+
+    # Sample 5: StatefulSet with VolumeClaimTemplate (CKA exam pattern)
+    cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sample-statefulset
+  namespace: storage-examples
+spec:
+  serviceName: sample-service
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stateful-app
+  template:
+    metadata:
+      labels:
+        app: stateful-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/nginx/html
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: ebs-gp3
+      resources:
+        requests:
+          storage: 5Gi
+EOF
+
+    # Create headless service for StatefulSet
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-service
+  namespace: storage-examples
+spec:
+  clusterIP: None
+  selector:
+    app: stateful-app
+  ports:
+  - port: 80
+    targetPort: 80
+EOF
+
+    # Sample 6: ConfigMap and Pod with multiple volume types (for exam practice)
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-config
+  namespace: storage-examples
+data:
+  config.txt: |
+    This is a sample configuration file
+    For CKA exam practice
+EOF
+
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-volume-pod
+  namespace: storage-examples
+spec:
+  containers:
+  - name: app
+    image: nginx:latest
+    volumeMounts:
+    - name: persistent-storage
+      mountPath: /data/persistent
+    - name: config-volume
+      mountPath: /data/config
+    - name: empty-dir
+      mountPath: /data/cache
+  volumes:
+  - name: persistent-storage
+    persistentVolumeClaim:
+      claimName: sample-pvc-default
+  - name: config-volume
+    configMap:
+      name: sample-config
+  - name: empty-dir
+    emptyDir: {}
+EOF
+
+    log "Sample storage resources created in 'storage-examples' namespace"
+}
+
 create_sample_resources() {
     log "Creating sample resources..."
     
@@ -508,22 +783,25 @@ print_completion() {
 
 main() {
     log "Starting Kubernetes Control Plane setup for Amazon Linux 2023..."
-    
+
     check_root
     check_os
-    
+
     prepare_system
     install_containerd
     install_kubernetes
     initialize_cluster
     install_calico
     install_metrics_server
+    install_ebs_csi_driver
+    create_storage_classes
+    create_storage_samples
     create_sample_resources
-    
+
     verify_installation
     generate_join_command
     print_completion
-    
+
     log "Setup completed successfully!"
 }
 

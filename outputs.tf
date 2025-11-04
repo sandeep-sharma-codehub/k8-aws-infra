@@ -119,6 +119,104 @@ output "service_network_cidr" {
   value       = var.service_cidr
 }
 
+# Storage Configuration Information
+output "storage_configuration" {
+  description = "Storage configuration and available StorageClasses"
+  value = {
+    ebs_csi_driver_installed = "AWS EBS CSI Driver (dynamic provisioning enabled)"
+    default_storage_class    = "ebs-gp3 (General Purpose SSD)"
+    available_storage_classes = [
+      "ebs-gp3 (default) - General Purpose SSD, 3000 IOPS, 125 MB/s throughput",
+      "ebs-gp2 - General Purpose SSD (legacy compatibility)",
+      "ebs-io2 - Provisioned IOPS SSD, 10000 IOPS (high performance)",
+      "ebs-sc1 - Cold HDD (throughput optimized)"
+    ]
+    features = [
+      "Dynamic volume provisioning",
+      "Volume expansion support (allowVolumeExpansion: true)",
+      "Encrypted volumes by default",
+      "WaitForFirstConsumer binding mode (topology-aware scheduling)"
+    ]
+  }
+}
+
+output "storage_examples_namespace" {
+  description = "Namespace containing storage practice examples"
+  value       = "storage-examples"
+}
+
+output "storage_practice_resources" {
+  description = "Sample storage resources created for CKA/CKAD practice"
+  value = {
+    pvcs = [
+      "sample-pvc-default (5Gi, default StorageClass)",
+      "sample-pvc-gp2 (10Gi, gp2 StorageClass)",
+      "PVCs from StatefulSet volumeClaimTemplates (data-sample-statefulset-0, data-sample-statefulset-1)"
+    ]
+    pods = [
+      "sample-pod-with-volume (nginx with PVC mount)",
+      "multi-volume-pod (multiple volume types: PVC, ConfigMap, emptyDir)"
+    ]
+    deployments = [
+      "sample-deployment-with-storage (nginx with PVC)"
+    ]
+    statefulsets = [
+      "sample-statefulset (2 replicas with volumeClaimTemplates)"
+    ]
+    configmaps = [
+      "sample-config (sample configuration data)"
+    ]
+  }
+}
+
+output "storage_commands" {
+  description = "Useful kubectl commands for storage practice"
+  value = <<-EOT
+    # Storage Commands for CKA/CKAD Practice
+
+    ## View StorageClasses
+    kubectl get storageclass
+    kubectl describe storageclass ebs-gp3
+
+    ## View PersistentVolumes and PersistentVolumeClaims
+    kubectl get pv
+    kubectl get pvc -n storage-examples
+    kubectl describe pvc sample-pvc-default -n storage-examples
+
+    ## View sample resources
+    kubectl get all -n storage-examples
+    kubectl get pods -n storage-examples
+    kubectl get statefulset -n storage-examples
+
+    ## Test storage functionality
+    kubectl exec -it sample-pod-with-volume -n storage-examples -- sh
+    kubectl exec -it multi-volume-pod -n storage-examples -- ls -la /data
+
+    ## Create a test PVC
+    cat <<EOF | kubectl apply -f -
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: test-pvc
+      namespace: storage-examples
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+    EOF
+
+    ## Delete test resources (cleanup)
+    kubectl delete namespace storage-examples
+
+    ## View EBS CSI Driver pods
+    kubectl get pods -n kube-system -l app=ebs-csi-controller
+    kubectl get pods -n kube-system -l app=ebs-csi-node
+    kubectl logs -n kube-system -l app=ebs-csi-controller -c ebs-plugin
+  EOT
+}
+
 # Setup Instructions
 output "setup_instructions" {
   description = "Step-by-step setup instructions"
