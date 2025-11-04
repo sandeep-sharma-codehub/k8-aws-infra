@@ -110,6 +110,60 @@ EOF
     log "System preparation completed"
 }
 
+set_hostname() {
+    log "Setting hostname for worker node..."
+
+    # Try to get worker number from AWS instance name tag or use last octet of IP
+    PRIVATE_IP=$(hostname -I | awk '{print $1}')
+    LAST_OCTET=$(echo $PRIVATE_IP | cut -d'.' -f4)
+
+    # Try to get instance name from AWS metadata
+    INSTANCE_NAME=""
+    if command -v aws &> /dev/null; then
+        INSTANCE_ID=$(ec2-metadata --instance-id 2>/dev/null | cut -d' ' -f2)
+        if [ ! -z "$INSTANCE_ID" ]; then
+            INSTANCE_NAME=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Name" --query 'Tags[0].Value' --output text 2>/dev/null)
+        fi
+    fi
+
+    # If we got a name tag with "worker" in it, use that; otherwise use IP-based naming
+    if [[ "$INSTANCE_NAME" =~ worker-([0-9]+) ]]; then
+        WORKER_NUM="${BASH_REMATCH[1]}"
+        HOSTNAME="k8s-worker-${WORKER_NUM}"
+    else
+        # Use last octet of IP as worker identifier
+        HOSTNAME="k8s-worker-${LAST_OCTET}"
+    fi
+
+    # Set the hostname
+    hostnamectl set-hostname "$HOSTNAME"
+
+    # Update /etc/hosts with new hostname
+    # Remove old entries for this IP
+    sed -i "/$PRIVATE_IP/d" /etc/hosts
+
+    # Add new entry
+    echo "$PRIVATE_IP $HOSTNAME" >> /etc/hosts
+
+    # Also add localhost entries if not present
+    if ! grep -q "127.0.0.1.*localhost" /etc/hosts; then
+        sed -i '1i127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4' /etc/hosts
+    fi
+    if ! grep -q "::1.*localhost" /etc/hosts; then
+        sed -i '2i::1         localhost localhost.localdomain localhost6 localhost6.localdomain6' /etc/hosts
+    fi
+
+    # Update cloud-init to preserve hostname across reboots
+    if [ -f /etc/cloud/cloud.cfg ]; then
+        sed -i 's/preserve_hostname: false/preserve_hostname: true/' /etc/cloud/cloud.cfg
+    fi
+
+    # Verify hostname
+    CURRENT_HOSTNAME=$(hostname)
+    log "Hostname set to: $CURRENT_HOSTNAME"
+    info "Private IP: $PRIVATE_IP"
+}
+
 # =============================================================================
 # CONTAINERD INSTALLATION
 # =============================================================================
@@ -288,12 +342,13 @@ print_completion() {
 
 main() {
     log "Starting Kubernetes Worker Node setup for Amazon Linux 2023..."
-    
+
     check_root
     check_os
     get_join_command "$@"
-    
+
     prepare_system
+    set_hostname
     install_containerd
     install_kubernetes
     join_cluster

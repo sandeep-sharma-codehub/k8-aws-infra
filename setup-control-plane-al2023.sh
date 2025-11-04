@@ -97,6 +97,41 @@ EOF
     log "System preparation completed"
 }
 
+set_hostname() {
+    log "Setting hostname for control plane..."
+
+    HOSTNAME="k8s-control-plane"
+    PRIVATE_IP=$(hostname -I | awk '{print $1}')
+
+    # Set the hostname
+    hostnamectl set-hostname "$HOSTNAME"
+
+    # Update /etc/hosts with new hostname
+    # Remove old entries for this IP
+    sed -i "/$PRIVATE_IP/d" /etc/hosts
+
+    # Add new entry
+    echo "$PRIVATE_IP $HOSTNAME" >> /etc/hosts
+
+    # Also add localhost entries if not present
+    if ! grep -q "127.0.0.1.*localhost" /etc/hosts; then
+        sed -i '1i127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4' /etc/hosts
+    fi
+    if ! grep -q "::1.*localhost" /etc/hosts; then
+        sed -i '2i::1         localhost localhost.localdomain localhost6 localhost6.localdomain6' /etc/hosts
+    fi
+
+    # Update cloud-init to preserve hostname across reboots
+    if [ -f /etc/cloud/cloud.cfg ]; then
+        sed -i 's/preserve_hostname: false/preserve_hostname: true/' /etc/cloud/cloud.cfg
+    fi
+
+    # Verify hostname
+    CURRENT_HOSTNAME=$(hostname)
+    log "Hostname set to: $CURRENT_HOSTNAME"
+    info "Private IP: $PRIVATE_IP"
+}
+
 # =============================================================================
 # CONTAINERD INSTALLATION
 # =============================================================================
@@ -788,6 +823,7 @@ main() {
     check_os
 
     prepare_system
+    set_hostname
     install_containerd
     install_kubernetes
     initialize_cluster
