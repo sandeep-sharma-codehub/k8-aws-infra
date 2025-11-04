@@ -143,7 +143,7 @@ scp_file() {
            -o StrictHostKeyChecking=no \
            -o UserKnownHostsFile=/dev/null \
            -o ConnectTimeout=$CONNECTION_TIMEOUT \
-           "$source" "$SSH_USER@$host:$destination" &>> "$DEPLOYMENT_LOG"; then
+           "$source" "$SSH_USER@$host:$destination" >> "$DEPLOYMENT_LOG" 2>&1; then
         success "File copied successfully"
         return 0
     else
@@ -295,7 +295,7 @@ deploy_control_plane() {
            -o StrictHostKeyChecking=no \
            -o UserKnownHostsFile=/dev/null \
            "$SSH_USER@$CONTROL_PLANE_IP:/tmp/kubeadm-join-command.sh" \
-           "$JOIN_COMMAND_FILE" &>> "$DEPLOYMENT_LOG"; then
+           "$JOIN_COMMAND_FILE" >> "$DEPLOYMENT_LOG" 2>&1; then
         success "Join command retrieved successfully"
     else
         error "Failed to retrieve join command from control plane"
@@ -442,7 +442,11 @@ verify_cluster() {
     echo "" | tee -a "$DEPLOYMENT_LOG"
     info "Cluster Status:"
     echo "" | tee -a "$DEPLOYMENT_LOG"
-    ssh_exec "$CONTROL_PLANE_IP" "kubectl get nodes -o wide" "Cluster"
+
+    # Check if API server is responding
+    if ! ssh_exec "$CONTROL_PLANE_IP" "kubectl get nodes -o wide 2>&1" "Cluster"; then
+        error "API server is not responding. Please run: ./diagnose-api-server.sh $CONTROL_PLANE_IP"
+    fi
 
     echo "" | tee -a "$DEPLOYMENT_LOG"
     info "System Pods Status:"

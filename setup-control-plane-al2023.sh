@@ -63,12 +63,12 @@ check_os() {
 
 prepare_system() {
     log "Preparing system for Kubernetes..."
-    
+
     # Update system
     dnf update -y --allowerasing
-    
+
     # Install basic tools
-    dnf install -y wget curl tar gzip --allowerasing
+    dnf install -y wget curl tar gzip git --allowerasing
     
     # Disable swap
     swapoff -a
@@ -239,7 +239,16 @@ EOF
 
 initialize_cluster() {
     log "Initializing Kubernetes cluster..."
-    
+
+    # Reset cluster if it was previously initialized
+    if [ -d "/etc/kubernetes/manifests" ]; then
+        log "Cleaning up previous cluster initialization..."
+        kubeadm reset -f --ignore-preflight-errors=all 2>/dev/null || true
+        rm -rf /etc/kubernetes /var/lib/etcd /var/lib/kubelet 2>/dev/null || true
+        systemctl restart kubelet 2>/dev/null || true
+        sleep 10
+    fi
+
     # Get instance IPs using IMDSv2
     TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s)
     PRIVATE_IP=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/local-ipv4)
@@ -300,18 +309,43 @@ serverTLSBootstrap: true
 cgroupDriver: systemd
 EOF
     
-    # Initialize cluster
-    kubeadm init --config=/etc/kubernetes/kubeadm-config.yaml
+    # Initialize cluster with retry logic for API server connectivity
+    local init_attempts=3
+    local init_attempt=1
+    local init_success=false
+
+    while [[ $init_attempt -le $init_attempts ]]; do
+        info "Attempting cluster initialization ($init_attempt/$init_attempts)..."
+        if kubeadm init --config=/etc/kubernetes/kubeadm-config.yaml; then
+            init_success=true
+            break
+        fi
+
+        if [[ $init_attempt -lt $init_attempts ]]; then
+            warn "Initialization attempt $init_attempt failed, retrying in 30 seconds..."
+            sleep 30
+
+            # Clean up failed initialization
+            kubeadm reset -f --ignore-preflight-errors=all 2>/dev/null || true
+        fi
+
+        ((init_attempt++))
+    done
+
+    if [[ "$init_success" != "true" ]]; then
+        error "Cluster initialization failed after $init_attempts attempts"
+    fi
     
     # Configure kubectl for root
     mkdir -p /root/.kube
-    cp -i /etc/kubernetes/admin.conf /root/.kube/config
+    cp -f /etc/kubernetes/admin.conf /root/.kube/config
     chown root:root /root/.kube/config
-    
+    export KUBECONFIG=/root/.kube/config
+
     # Configure kubectl for ec2-user
     if id "ec2-user" &>/dev/null; then
         mkdir -p /home/ec2-user/.kube
-        cp -i /etc/kubernetes/admin.conf /home/ec2-user/.kube/config
+        cp -f /etc/kubernetes/admin.conf /home/ec2-user/.kube/config
         chown ec2-user:ec2-user /home/ec2-user/.kube/config
         
         # Add aliases and KUBECONFIG export
@@ -335,21 +369,21 @@ EOF
 
 install_calico() {
     log "Installing Calico CNI..."
-    
-    # Wait for API server to be fully ready
-    local max_attempts=60
+
+    # Wait for API server to be fully ready - increased timeout for initial boot
+    local max_attempts=120
     local attempt=1
-    
+
     while [[ $attempt -le $max_attempts ]]; do
         if timeout 10 kubectl get nodes &>/dev/null && timeout 10 kubectl get pods -n kube-system &>/dev/null; then
             log "API server is ready"
             break
         fi
-        info "Waiting for API server... ($attempt/$max_attempts)"
+        info "Waiting for API server... ($attempt/$max_attempts, ~$((($max_attempts - $attempt) * 5 / 60)) minutes remaining)"
         sleep 5
         ((attempt++))
         if [[ $attempt -gt $max_attempts ]]; then
-            error "API server failed to become ready"
+            error "API server failed to become ready after $(($max_attempts * 5)) seconds"
         fi
     done
     
@@ -511,6 +545,23 @@ create_storage_samples() {
 
     # Create a namespace for storage examples
     kubectl create namespace storage-examples || true
+
+    # Wait for default service account to be created in the namespace
+    info "Waiting for default service account in storage-examples namespace..."
+    local sa_attempts=30
+    local sa_attempt=1
+
+    while [[ $sa_attempt -le $sa_attempts ]]; do
+        if kubectl get serviceaccount default -n storage-examples &>/dev/null; then
+            log "Default service account is ready"
+            break
+        fi
+        sleep 1
+        ((sa_attempt++))
+        if [[ $sa_attempt -gt $sa_attempts ]]; then
+            warn "Default service account not found after 30 seconds, continuing anyway..."
+        fi
+    done
 
     # Sample 1: Simple PVC with default StorageClass
     cat <<EOF | kubectl apply -f -
@@ -702,7 +753,26 @@ create_sample_resources() {
     for ns in frontend backend monitoring testing production; do
         kubectl create namespace "$ns" || true
     done
-    
+
+    # Wait for default service accounts to be created in all namespaces
+    info "Waiting for default service accounts in all namespaces..."
+    for ns in frontend backend monitoring testing production; do
+        local sa_attempts=30
+        local sa_attempt=1
+
+        while [[ $sa_attempt -le $sa_attempts ]]; do
+            if kubectl get serviceaccount default -n "$ns" &>/dev/null; then
+                break
+            fi
+            sleep 1
+            ((sa_attempt++))
+            if [[ $sa_attempt -gt $sa_attempts ]]; then
+                warn "Default service account not found in $ns after 30 seconds"
+            fi
+        done
+    done
+    log "All default service accounts are ready"
+
     # Create sample network policy
     cat <<EOF | kubectl apply -f -
 apiVersion: networking.k8s.io/v1
