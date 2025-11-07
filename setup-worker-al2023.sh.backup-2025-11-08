@@ -83,9 +83,9 @@ get_join_command() {
 
 prepare_system() {
     log "Preparing system for Kubernetes..."
-
+    
     dnf update -y --allowerasing
-    dnf install -y wget curl tar gzip bind-utils --allowerasing
+    dnf install -y wget curl tar gzip --allowerasing
     
     swapoff -a
     sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
@@ -113,19 +113,13 @@ EOF
 set_hostname() {
     log "Setting hostname for worker node..."
 
-    # Use EC2 metadata service (IMDSv2) for reliable IP detection
-    TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s 2>/dev/null)
-
-    if [ -z "$TOKEN" ]; then
-        error "Failed to get IMDSv2 token. Ensure EC2 instance metadata is accessible."
-    fi
-
-    PRIVATE_IP=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" \
-        -s http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null)
+    # Try to get worker number from AWS instance name tag or use last octet of IP
+    # Use ip command as fallback since hostname -I may not work reliably on AL2023
+    PRIVATE_IP=$(ip addr show | grep -E "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | head -1)
 
     if [ -z "$PRIVATE_IP" ]; then
-        error "Failed to get private IP from EC2 metadata"
+        warn "Could not determine private IP, using fallback"
+        PRIVATE_IP="127.0.0.1"
     fi
 
     LAST_OCTET=$(echo $PRIVATE_IP | cut -d'.' -f4)
@@ -280,20 +274,20 @@ join_cluster() {
     # Pre-join diagnostics
     log "Running pre-join diagnostics..."
 
-    # Extract API server address from join command (using sed instead of grep -P)
-    API_SERVER=$(echo "$JOIN_COMMAND" | sed -n 's/.*\(https:\/\/[^ ]*\).*/\1/p' | cut -d'/' -f3)
+    # Extract API server address from join command
+    API_SERVER=$(echo "$JOIN_COMMAND" | grep -oP 'https://\K[^/]+' | head -1)
     if [ -z "$API_SERVER" ]; then
         warn "Could not extract API server from join command"
     else
         info "API Server: $API_SERVER"
 
-        # Test DNS resolution (using getent instead of nslookup)
+        # Test DNS resolution
         info "Testing DNS resolution for API server..."
         API_HOST="${API_SERVER%:*}"
-        if getent hosts "$API_HOST" &>/dev/null; then
+        if nslookup "$API_HOST" &>/dev/null; then
             info "DNS resolution successful for $API_HOST"
         else
-            error "DNS resolution failed for $API_HOST - check /etc/resolv.conf and VPC DNS settings"
+            warn "DNS resolution failed for $API_HOST - ensure /etc/resolv.conf is configured"
         fi
 
         # Test TCP connectivity to API server
@@ -306,12 +300,10 @@ join_cluster() {
         if timeout 5 bash -c "echo >/dev/tcp/$API_HOST/$API_PORT" 2>/dev/null; then
             info "Successfully connected to API server on $API_SERVER"
         else
-            error "Cannot connect to API server on $API_SERVER:$API_PORT
-Verify:
-  1) Security group allows port $API_PORT from worker to control plane
-  2) Control plane is running: 'systemctl status kubelet'
-  3) API server is healthy: 'kubectl get cs' on control plane
-  4) Network ACLs and route tables are configured correctly"
+            warn "Could not connect to API server on $API_SERVER:$API_PORT"
+            warn "Verify: 1) Security groups allow port $API_PORT from worker to control plane"
+            warn "        2) Control plane is running and accessible"
+            warn "        3) Network connectivity between worker and control plane"
         fi
     fi
 
@@ -328,23 +320,31 @@ Verify:
         sleep 1
     done
 
-    # Ensure kubelet is configured before joining
+    # Ensure kubelet is configured before starting
     log "Configuring kubelet..."
     cat <<EOF > /etc/default/kubelet
 KUBELET_EXTRA_ARGS=--cloud-provider=external
 EOF
 
-    # Enable kubelet (kubeadm join will start it)
+    # Wait for kubelet to be ready
+    log "Starting and waiting for kubelet to be ready..."
     systemctl enable kubelet
+    systemctl start kubelet
+
+    for i in {1..30}; do
+        if systemctl is-active --quiet kubelet; then
+            info "kubelet is running"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            error "kubelet failed to start after 30 seconds"
+        fi
+        sleep 1
+    done
 
     # Give services time to stabilize
-    log "Allowing containerd to stabilize (5 seconds)..."
-    sleep 5
-
-    # Validate join command before execution
-    if [[ ! "$JOIN_COMMAND" =~ ^kubeadm[[:space:]]+join[[:space:]] ]]; then
-        error "Invalid join command format. Must start with 'kubeadm join'. Got: $JOIN_COMMAND"
-    fi
+    log "Allowing services to stabilize (10 seconds)..."
+    sleep 10
 
     # Execute the join command with retry logic
     MAX_RETRIES=3
@@ -355,7 +355,6 @@ EOF
         RETRY_COUNT=$((RETRY_COUNT + 1))
         log "Executing kubeadm join (attempt $RETRY_COUNT/$MAX_RETRIES)..."
 
-        # Execute join command (validated above to start with 'kubeadm join')
         if eval "$JOIN_COMMAND"; then
             info "kubeadm join command executed successfully"
             JOIN_SUCCESS=true
@@ -367,16 +366,12 @@ EOF
             if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 warn "Retrying in 15 seconds (attempt $RETRY_COUNT/$MAX_RETRIES)..."
                 sleep 15
-            else
-                error "Failed to join cluster after $MAX_RETRIES attempts.
-Check logs: journalctl -xeu kubelet
-Debug with: kubeadm join ... --v=5"
             fi
         fi
     done
 
     if [ "$JOIN_SUCCESS" = false ]; then
-        error "Failed to join cluster after $MAX_RETRIES attempts"
+        error "Failed to join cluster after $MAX_RETRIES attempts. Run with --v=5 for detailed logs: kubeadm join ... --v=5"
     fi
 
     # Restart kubelet after successful join

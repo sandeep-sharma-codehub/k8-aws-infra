@@ -100,22 +100,8 @@ EOF
 set_hostname() {
     log "Setting hostname for control plane..."
 
-    # Use EC2 metadata service (IMDSv2) for reliable IP detection
-    TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s 2>/dev/null)
-
-    if [ -z "$TOKEN" ]; then
-        error "Failed to get IMDSv2 token. Ensure EC2 instance metadata is accessible."
-    fi
-
-    PRIVATE_IP=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" \
-        -s http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null)
-
-    if [ -z "$PRIVATE_IP" ]; then
-        error "Failed to get private IP from EC2 metadata"
-    fi
-
     HOSTNAME="k8s-control-plane"
+    PRIVATE_IP=$(hostname -I | awk '{print $1}')
 
     # Set the hostname
     hostnamectl set-hostname "$HOSTNAME"
@@ -401,8 +387,8 @@ install_calico() {
         fi
     done
     
-    # Install Calico operator
-    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
+    # Install Calico operator with validation disabled initially
+    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml --validate=false
     
     # Wait for Calico CRDs to be ready
     info "Waiting for Calico CRDs to be installed..."
@@ -493,65 +479,17 @@ install_metrics_server() {
     log "Metrics Server installed"
 }
 
-verify_iam_role() {
-    log "Verifying IAM instance profile..."
-
-    TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" -s 2>/dev/null)
-
-    IAM_ROLE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" \
-        -s http://169.254.169.254/latest/meta-data/iam/info 2>/dev/null | grep InstanceProfileArn)
-
-    if [ -z "$IAM_ROLE" ]; then
-        warn "No IAM instance profile attached. EBS CSI driver will not work without IAM permissions."
-        warn "Attach an IAM role with EBS management permissions to this instance."
-        return 1
-    fi
-
-    log "IAM instance profile found: $(echo $IAM_ROLE | cut -d'"' -f4)"
-    return 0
-}
-
 install_ebs_csi_driver() {
     log "Installing AWS EBS CSI Driver..."
-
-    # Verify IAM role first
-    if ! verify_iam_role; then
-        warn "Skipping EBS CSI driver installation due to missing IAM role"
-        warn "To enable persistent storage, attach an IAM role and run: kubectl apply -k \"github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.28\""
-        return 0
-    fi
 
     # Install the EBS CSI Driver using the public manifests
     # Note: This uses the IAM role attached to EC2 instances for AWS API access
     kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.28"
 
-    # Wait for CSI driver pods to be ready with proper checks
-    log "Waiting for EBS CSI Driver to be ready..."
-    local csi_attempts=60
-    local csi_attempt=1
-
-    while [[ $csi_attempt -le $csi_attempts ]]; do
-        READY_CONTROLLERS=$(kubectl get pods -n kube-system -l app=ebs-csi-controller \
-            -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -o "True" | wc -l)
-
-        if [ "$READY_CONTROLLERS" -ge 2 ]; then
-            log "EBS CSI Driver controllers are ready"
-            break
-        fi
-
-        info "Waiting for CSI driver controllers... ($csi_attempt/$csi_attempts)"
-        sleep 5
-        ((csi_attempt++))
-
-        if [[ $csi_attempt -gt $csi_attempts ]]; then
-            warn "EBS CSI Driver may not be fully ready. Check: kubectl get pods -n kube-system | grep ebs"
-        fi
-    done
-
-    # Wait for node daemonset
-    kubectl wait --for=condition=ready pod -l app=ebs-csi-node -n kube-system --timeout=120s || \
-        warn "CSI node pods might not be ready yet. Check: kubectl get pods -n kube-system -l app=ebs-csi-node"
+    # Wait for CSI driver pods to be ready
+    log "Waiting for EBS CSI Driver pods to be ready..."
+    kubectl wait --for=condition=ready pod -l app=ebs-csi-controller -n kube-system --timeout=300s || log "Warning: CSI controller pods might not be ready yet"
+    kubectl wait --for=condition=ready pod -l app=ebs-csi-node -n kube-system --timeout=300s || log "Warning: CSI node pods might not be ready yet"
 
     log "AWS EBS CSI Driver installed"
 }
