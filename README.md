@@ -1,6 +1,8 @@
 # Kubernetes CKA/CKAD Practice Environment on AWS
 
-Self-managed Kubernetes cluster infrastructure on AWS using Terraform, designed specifically for CKA (Certified Kubernetes Administrator) and CKAD (Certified Kubernetes Application Developer) exam preparation.
+Self-managed Kubernetes cluster infrastructure on AWS using Terraform, designed for kubernetes learning and Practicing.
+
+Prerequisite: Create a pem key and place it in ~/.ssh location  k8-cluster.pem
 
 ## Features
 
@@ -76,25 +78,25 @@ See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions and adv
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         AWS VPC                             │
-│  ┌─────────────────────┐  ┌──────────────────────────────┐ │
-│  │  Public Subnet 1    │  │     Public Subnet 2          │ │
-│  │                     │  │                              │ │
-│  │  ┌──────────────┐   │  │  ┌──────────┐  ┌──────────┐ │ │
-│  │  │ Control      │   │  │  │ Worker-1 │  │ Worker-2 │ │ │
-│  │  │ Plane        │───┼──┼──│          │  │          │ │ │
-│  │  │ t3.medium    │   │  │  │t3.small  │  │t3.small  │ │ │
-│  │  │              │   │  │  │          │  │          │ │ │
-│  │  └──────────────┘   │  │  └──────────┘  └──────────┘ │ │
-│  │                     │  │                              │ │
-│  │  • API Server       │  │  • kubelet                   │ │
-│  │  • etcd             │  │  • Container Runtime         │ │
-│  │  • Controller Mgr   │  │  • Calico Node               │ │
-│  │  • Scheduler        │  │  • EBS CSI Node Plugin       │ │
-│  │  • Calico           │  │                              │ │
-│  │  • EBS CSI Driver   │  │                              │ │
-│  └─────────────────────┘  └──────────────────────────────┘ │
+│  ┌─────────────────────┐  ┌──────────────────────────────┐  │
+│  │  Public Subnet 1    │  │     Public Subnet 2          │  │
+│  │                     │  │                              │  │
+│  │  ┌──────────────┐   │  │  ┌──────────┐  ┌──────────┐  │  │
+│  │  │ Control      │   │  │  │ Worker-1 │  │ Worker-2 │  │  │
+│  │  │ Plane        │───┼──┼──│          │  │          │  │  │
+│  │  │ t3.medium    │   │  │  │t3.medium │  │t3.medium │  │  │
+│  │  │              │   │  │  │          │  │          │  │  │
+│  │  └──────────────┘   │  │  └──────────┘  └──────────┘  │  │
+│  │                     │  │                              │  │
+│  │  • API Server       │  │  • kubelet                   │  │
+│  │  • etcd             │  │  • Container Runtime         │  │
+│  │  • Controller Mgr   │  │  • Calico Node               │  │
+│  │  • Scheduler        │  │  • EBS CSI Node Plugin       │  │
+│  │  • Calico           │  │                              │  │
+│  │  • EBS CSI Driver   │  │                              │  │
+│  └─────────────────────┘  └──────────────────────────────┘  │
 │                                                             │
-│  Security Groups | IAM Roles | Internet Gateway            │
+│  Security Groups | IAM Roles | Internet Gateway             │
 └─────────────────────────────────────────────────────────────┘
                           │
                     [Internet]
@@ -132,7 +134,7 @@ Customize your cluster via `terraform.tfvars`:
 ```hcl
 # Instance types
 control_plane_instance_type = "t3.medium"   # or t3.large for better performance
-worker_node_instance_type   = "t3.small"    # or t3.medium
+worker_node_instance_type   = "t3.medium"   # or t3.medium
 worker_node_count          = 2              # 1-10 workers
 
 # Storage
@@ -174,24 +176,6 @@ See `terraform.tfvars.example` for all options.
 
 **Always run `terraform destroy` when not using the cluster to avoid unnecessary charges.**
 
-## CKA/CKAD Exam Readiness
-
-This environment covers all major exam topics:
-
-### CKA Topics Covered
-✅ Cluster Architecture, Installation & Configuration
-✅ Workloads & Scheduling
-✅ Services & Networking
-✅ Storage (PV, PVC, StorageClasses)
-✅ Troubleshooting
-✅ Cluster Maintenance
-
-### CKAD Topics Covered
-✅ Application Design and Build
-✅ Application Deployment
-✅ Application Observability and Maintenance
-✅ Application Environment, Configuration and Security
-✅ Services & Networking
 
 ### Sample Resources Included
 
@@ -219,7 +203,7 @@ This environment covers all major exam topics:
 
 ```bash
 # SSH to control plane
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@<control-plane-ip>
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@<control-plane-ip>
 
 # From control plane, use kubectl
 kubectl get nodes
@@ -308,10 +292,10 @@ kubectl get all -n storage-examples
 ### SSH Issues
 ```bash
 # Fix key permissions
-chmod 400 ~/.ssh/k8s-cluster.pem
+chmod 400 ~/.ssh/k8-cluster.pem
 
 # Test SSH manually
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@<ip>
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@<ip>
 ```
 
 ### Deployment Failures
@@ -323,7 +307,7 @@ cat deployment-*.log
 terraform output
 
 # Manually run setup scripts
-ssh -i ~/.ssh/k8s-cluster.pem ec2-user@<control-plane-ip>
+ssh -i ~/.ssh/k8-cluster.pem ec2-user@<control-plane-ip>
 sudo /tmp/setup-control-plane-al2023.sh
 ```
 
@@ -390,7 +374,7 @@ terraform destroy
 rm deployment-*.log
 
 # Remove SSH key (if you want)
-rm ~/.ssh/k8s-cluster.pem
+rm ~/.ssh/k8-cluster.pem
 ```
 
 ## Documentation
@@ -401,7 +385,7 @@ rm ~/.ssh/k8s-cluster.pem
 
 ## Support & Contributions
 
-This is a practice environment for CKA/CKAD preparation. For issues:
+This is a practice environment for learning kubernetes and CKA/CKAD preparation. For issues:
 1. Check deployment logs
 2. Review Terraform outputs
 3. Verify AWS resources in console

@@ -63,6 +63,7 @@ plan.out
 
 # Terraform Module Cache
 .terraform.d/
+.claude
 
 # Terraform Plugin Cache
 .terraformrc

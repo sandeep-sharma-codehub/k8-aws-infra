@@ -481,6 +481,107 @@ verify_cluster() {
 }
 
 # =============================================================================
+# KUBECTL CONFIGURATION FOR WORKERS
+# =============================================================================
+
+configure_kubectl_on_workers() {
+    phase "5" "Configure kubectl Access on Worker Nodes"
+
+    if [ ${#WORKER_IPS[@]} -eq 0 ]; then
+        warn "No worker nodes to configure"
+        return
+    fi
+
+    info "Setting up kubectl access on worker nodes..."
+
+    # Prepare admin.conf on control plane
+    info "Preparing kubeconfig on control plane..."
+    if ! ssh_exec "$CONTROL_PLANE_IP" \
+        "sudo cp /etc/kubernetes/admin.conf /tmp/admin.conf && sudo chown $SSH_USER:$SSH_USER /tmp/admin.conf" \
+        "Control Plane" &>/dev/null; then
+        warn "Failed to prepare kubeconfig on control plane"
+        return 1
+    fi
+
+    # Download kubeconfig locally
+    local temp_kubeconfig="/tmp/kubeadm-admin-$(date +%s).conf"
+    info "Downloading kubeconfig..."
+    if ! scp -i "$SSH_KEY" \
+           -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout=$CONNECTION_TIMEOUT \
+           "$SSH_USER@$CONTROL_PLANE_IP:/tmp/admin.conf" \
+           "$temp_kubeconfig" >> "$DEPLOYMENT_LOG" 2>&1; then
+        warn "Failed to download kubeconfig from control plane"
+        return 1
+    fi
+    success "Kubeconfig downloaded"
+
+    # Configure each worker
+    for i in "${!WORKER_IPS[@]}"; do
+        local worker_ip="${WORKER_IPS[$i]}"
+        local worker_num=$((i+1))
+
+        info "Configuring kubectl on worker-$worker_num ($worker_ip)..."
+
+        # Create .kube directory
+        if ! ssh -i "$SSH_KEY" \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=$CONNECTION_TIMEOUT \
+               "$SSH_USER@$worker_ip" \
+               "mkdir -p \$HOME/.kube" >> "$DEPLOYMENT_LOG" 2>&1; then
+            warn "Failed to create .kube directory on worker-$worker_num"
+            continue
+        fi
+
+        # Copy kubeconfig to worker
+        if ! scp -i "$SSH_KEY" \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=$CONNECTION_TIMEOUT \
+               "$temp_kubeconfig" \
+               "$SSH_USER@$worker_ip:~/.kube/config" >> "$DEPLOYMENT_LOG" 2>&1; then
+            warn "Failed to copy kubeconfig to worker-$worker_num"
+            continue
+        fi
+
+        # Set proper ownership
+        if ! ssh -i "$SSH_KEY" \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=$CONNECTION_TIMEOUT \
+               "$SSH_USER@$worker_ip" \
+               "sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config" >> "$DEPLOYMENT_LOG" 2>&1; then
+            warn "Failed to set ownership on worker-$worker_num"
+            continue
+        fi
+
+        # Verify kubectl access
+        if ssh -i "$SSH_KEY" \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=$CONNECTION_TIMEOUT \
+               "$SSH_USER@$worker_ip" \
+               "kubectl get nodes &>/dev/null" 2>&1; then
+            success "Worker-$worker_num kubectl configured successfully"
+        else
+            warn "Worker-$worker_num kubectl configuration may not be working"
+        fi
+    done
+
+    # Cleanup
+    rm -f "$temp_kubeconfig"
+    ssh -i "$SSH_KEY" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        "$SSH_USER@$CONTROL_PLANE_IP" \
+        "rm -f /tmp/admin.conf" >> "$DEPLOYMENT_LOG" 2>&1
+
+    success "kubectl configuration completed for all workers"
+}
+
+# =============================================================================
 # SUMMARY AND CLEANUP
 # =============================================================================
 
@@ -507,19 +608,29 @@ print_summary() {
     echo -e "  Total Duration: ${duration_min}m ${duration_sec}s" | tee -a "$DEPLOYMENT_LOG"
     echo "" | tee -a "$DEPLOYMENT_LOG"
 
+    echo -e "${BOLD}kubectl Access:${NC}" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  ✓ kubectl configured on control plane and all worker nodes" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  ✓ You can run kubectl commands from any node in the cluster" | tee -a "$DEPLOYMENT_LOG"
+    echo "" | tee -a "$DEPLOYMENT_LOG"
+
     echo -e "${BOLD}Next Steps:${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo -e "  1. SSH to control plane:" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}ssh -i $SSH_KEY $SSH_USER@$CONTROL_PLANE_IP${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo "" | tee -a "$DEPLOYMENT_LOG"
-    echo -e "  2. View cluster status:" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  2. SSH to worker nodes (kubectl is available on all workers):" | tee -a "$DEPLOYMENT_LOG"
+    for i in "${!WORKER_IPS[@]}"; do
+        echo -e "     ${CYAN}ssh -i $SSH_KEY $SSH_USER@${WORKER_IPS[$i]}${NC}" | tee -a "$DEPLOYMENT_LOG"
+    done
+    echo "" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  3. View cluster status (from any node):" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}kubectl get nodes${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}kubectl get pods --all-namespaces${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo "" | tee -a "$DEPLOYMENT_LOG"
-    echo -e "  3. Explore storage examples:" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  4. Explore storage examples:" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}kubectl get all -n storage-examples${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}kubectl get pvc -n storage-examples${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo "" | tee -a "$DEPLOYMENT_LOG"
-    echo -e "  4. View storage classes:" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  5. View storage classes:" | tee -a "$DEPLOYMENT_LOG"
     echo -e "     ${CYAN}kubectl get storageclass${NC}" | tee -a "$DEPLOYMENT_LOG"
     echo "" | tee -a "$DEPLOYMENT_LOG"
 
@@ -565,6 +676,11 @@ main() {
 
     # Phase 4: Verify cluster
     verify_cluster
+
+    # Phase 5: Configure kubectl on workers
+    if [ ${#WORKER_IPS[@]} -gt 0 ]; then
+        configure_kubectl_on_workers
+    fi
 
     # Print summary
     print_summary
