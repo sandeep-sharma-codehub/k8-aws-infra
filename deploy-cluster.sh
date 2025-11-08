@@ -202,12 +202,17 @@ get_terraform_outputs() {
     success "Control plane IP: $CONTROL_PLANE_IP"
 
     # Get worker IPs (JSON array)
-    local worker_ips_json=$(cd "$TERRAFORM_DIR" && terraform output -json worker_nodes_public_ips 2>/dev/null)
+    local worker_ips_json=$(cd "$TERRAFORM_DIR" && terraform output -json worker_node_public_ips 2>/dev/null)
     if [ -z "$worker_ips_json" ] || [ "$worker_ips_json" == "null" ]; then
         warn "No worker nodes found in Terraform output"
     else
         # Parse JSON array into bash array
-        mapfile -t WORKER_IPS < <(echo "$worker_ips_json" | jq -r '.[]')
+        local ips_output=$(echo "$worker_ips_json" | jq -r '.[]')
+        while IFS= read -r ip; do
+            [ -n "$ip" ] && WORKER_IPS+=("$ip")
+        done <<EOF
+$ips_output
+EOF
         success "Worker nodes found: ${#WORKER_IPS[@]}"
         for i in "${!WORKER_IPS[@]}"; do
             info "  Worker $((i+1)): ${WORKER_IPS[$i]}"
@@ -419,11 +424,22 @@ verify_cluster() {
         local elapsed=0
 
         while [ $elapsed -lt $max_wait ]; do
-            local not_ready=$(ssh_exec "$CONTROL_PLANE_IP" \
-                "kubectl get nodes --no-headers 2>/dev/null | grep -c NotReady || true" \
-                "Control Plane" 2>/dev/null || echo "999")
+            # Count total nodes and Ready nodes to determine if all are ready
+            local total_nodes=$(ssh -i "$SSH_KEY" \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=$CONNECTION_TIMEOUT \
+                "$SSH_USER@$CONTROL_PLANE_IP" \
+                "kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' '" 2>/dev/null || echo "0")
 
-            if [ "$not_ready" = "0" ]; then
+            local ready_nodes=$(ssh -i "$SSH_KEY" \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=$CONNECTION_TIMEOUT \
+                "$SSH_USER@$CONTROL_PLANE_IP" \
+                "kubectl get nodes --no-headers 2>/dev/null | grep -w Ready | wc -l | tr -d ' '" 2>/dev/null || echo "0")
+
+            if [ "$total_nodes" -gt "0" ] && [ "$total_nodes" = "$ready_nodes" ]; then
                 success "All nodes are Ready"
                 break
             fi
