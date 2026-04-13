@@ -16,37 +16,38 @@ Prerequisite: Create a pem key and place it in ~/.ssh location  k8-cluster.pem
 
 ## Quick Start
 
-### 1. Deploy Infrastructure
-
 ```bash
-# Clone repository
-cd k8-aws-infra
+# 1. Clone the repo
+git clone <repo-url> && cd k8-aws-infra
 
-# Configure AWS credentials
-export AWS_ACCESS_KEY_ID="your-access-key"
-export AWS_SECRET_ACCESS_KEY="your-secret-key"
-export AWS_REGION="us-west-2"
+# 2. Configure AWS credentials (if not already set)
+aws configure
 
-# Configure Terraform variables
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your settings
-
-# Deploy AWS infrastructure
-terraform init
-terraform plan
-terraform apply
+# 3. Run bootstrap — handles everything automatically
+./bootstrap.sh
 ```
 
-### 2. Deploy Kubernetes Cluster
+Your cluster will be ready in ~25-30 minutes. The script will:
+- Generate an SSH keypair if you don't have one
+- Create `terraform.tfvars` with your IP and public key pre-filled
+- Deploy AWS infrastructure with Terraform
+- Bootstrap the Kubernetes cluster
+- Download `kubectl` config to `~/.kube/k8s-practice-config`
 
 ```bash
-# Automated deployment (recommended)
-./deploy-cluster.sh
+# After bootstrap completes:
+export KUBECONFIG=~/.kube/k8s-practice-config
+kubectl get nodes
 ```
 
-**That's it!** Your Kubernetes cluster will be fully configured and ready in ~25-30 minutes.
+**Prerequisites:** `terraform`, `aws` CLI, `jq`, `curl` — see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for install instructions.
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions and advanced options.
+**Advanced / manual deployment:** See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
+
+**When done practicing:**
+```bash
+terraform destroy
+```
 
 ## What Gets Deployed
 
