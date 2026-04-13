@@ -2,7 +2,7 @@
 
 Self-managed Kubernetes cluster infrastructure on AWS using Terraform, designed for kubernetes learning and Practicing.
 
-Prerequisite: Create a pem key and place it in ~/.ssh location  k8-cluster.pem
+Run `./bootstrap.sh` to get started — it handles SSH key generation, infrastructure, and cluster setup automatically.
 
 ## Features
 
@@ -109,6 +109,7 @@ terraform destroy
 
 ```
 k8-aws-infra/
+├── bootstrap.sh                     # Zero-friction setup (start here)
 ├── main.tf                          # Terraform infrastructure
 ├── variables.tf                     # Configuration variables (30+)
 ├── outputs.tf                       # Terraform outputs
@@ -116,6 +117,9 @@ k8-aws-infra/
 ├── setup-control-plane-al2023.sh    # Control plane setup script
 ├── setup-worker-al2023.sh           # Worker node setup script
 ├── deploy-cluster.sh                # Automated deployment orchestration
+├── diagnose-control-plane.sh        # Control plane diagnostics
+├── diagnose-worker.sh               # Worker node diagnostics
+├── cleanup-workers.sh               # Worker node cleanup utility
 ├── DEPLOYMENT_GUIDE.md              # Detailed deployment instructions
 └── README.md                        # This file
 ```
