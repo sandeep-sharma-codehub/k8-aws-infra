@@ -591,6 +591,9 @@ setup_local_kubectl() {
     local kubeconfig_dest="$HOME/.kube/k8s-practice-config"
     local tmp_kubeconfig="/tmp/k8s-practice-kubeconfig-$(date +%s).yaml"
 
+    # Ensure local temp file is removed on any exit path
+    trap 'rm -f "$tmp_kubeconfig" "${tmp_kubeconfig}.bak"' RETURN
+
     # Copy kubeconfig on control plane to a readable location
     info "Exporting kubeconfig from control plane..."
     if ! ssh -i "$SSH_KEY" \
@@ -598,7 +601,7 @@ setup_local_kubectl() {
            -o UserKnownHostsFile=/dev/null \
            -o ConnectTimeout="$CONNECTION_TIMEOUT" \
            "$SSH_USER@$CONTROL_PLANE_IP" \
-           "sudo cp /etc/kubernetes/admin.conf /tmp/kubeconfig-export.yaml && sudo chown \$(id -u):\$(id -g) /tmp/kubeconfig-export.yaml" >> "$DEPLOYMENT_LOG" 2>&1; then
+           "sudo cp /etc/kubernetes/admin.conf /tmp/kubeconfig-export.yaml && sudo chown $SSH_USER:$SSH_USER /tmp/kubeconfig-export.yaml" >> "$DEPLOYMENT_LOG" 2>&1; then
         warn "Failed to export kubeconfig on control plane — skipping local kubectl setup"
         return 0
     fi
@@ -611,6 +614,9 @@ setup_local_kubectl() {
            "$SSH_USER@$CONTROL_PLANE_IP:/tmp/kubeconfig-export.yaml" \
            "$tmp_kubeconfig" >> "$DEPLOYMENT_LOG" 2>&1; then
         warn "Failed to download kubeconfig — skipping local kubectl setup"
+        ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$SSH_USER@$CONTROL_PLANE_IP" \
+            "rm -f /tmp/kubeconfig-export.yaml" >> "$DEPLOYMENT_LOG" 2>&1 || true
         return 0
     fi
 
@@ -619,8 +625,7 @@ setup_local_kubectl() {
     private_ip=$(grep "server:" "$tmp_kubeconfig" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
     if [ -n "$private_ip" ]; then
-        sed -i.bak "s|https://${private_ip}:6443|https://${CONTROL_PLANE_IP}:6443|g" "$tmp_kubeconfig"
-        rm -f "${tmp_kubeconfig}.bak"
+        sed -i "s|https://${private_ip}:6443|https://${CONTROL_PLANE_IP}:6443|g" "$tmp_kubeconfig"
         success "Server URL patched: $private_ip → $CONTROL_PLANE_IP"
     else
         warn "Could not detect private IP in kubeconfig — local kubectl may not connect"
