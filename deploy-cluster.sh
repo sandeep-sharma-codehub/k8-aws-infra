@@ -582,6 +582,70 @@ configure_kubectl_on_workers() {
 }
 
 # =============================================================================
+# LOCAL KUBECTL SETUP
+# =============================================================================
+
+setup_local_kubectl() {
+    phase "6" "Local kubectl Setup"
+
+    local kubeconfig_dest="$HOME/.kube/k8s-practice-config"
+    local tmp_kubeconfig="/tmp/k8s-practice-kubeconfig-$(date +%s).yaml"
+
+    # Copy kubeconfig on control plane to a readable location
+    info "Exporting kubeconfig from control plane..."
+    if ! ssh -i "$SSH_KEY" \
+           -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout="$CONNECTION_TIMEOUT" \
+           "$SSH_USER@$CONTROL_PLANE_IP" \
+           "sudo cp /etc/kubernetes/admin.conf /tmp/kubeconfig-export.yaml && sudo chown \$(id -u):\$(id -g) /tmp/kubeconfig-export.yaml" >> "$DEPLOYMENT_LOG" 2>&1; then
+        warn "Failed to export kubeconfig on control plane — skipping local kubectl setup"
+        return 0
+    fi
+
+    # Download to local temp file
+    if ! scp -i "$SSH_KEY" \
+           -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout="$CONNECTION_TIMEOUT" \
+           "$SSH_USER@$CONTROL_PLANE_IP:/tmp/kubeconfig-export.yaml" \
+           "$tmp_kubeconfig" >> "$DEPLOYMENT_LOG" 2>&1; then
+        warn "Failed to download kubeconfig — skipping local kubectl setup"
+        return 0
+    fi
+
+    # Patch server URL: replace private IP with public IP
+    local private_ip
+    private_ip=$(grep "server:" "$tmp_kubeconfig" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+
+    if [ -n "$private_ip" ]; then
+        sed -i.bak "s|https://${private_ip}:6443|https://${CONTROL_PLANE_IP}:6443|g" "$tmp_kubeconfig"
+        rm -f "${tmp_kubeconfig}.bak"
+        success "Server URL patched: $private_ip → $CONTROL_PLANE_IP"
+    else
+        warn "Could not detect private IP in kubeconfig — local kubectl may not connect"
+    fi
+
+    # Save to named file (never overwrites ~/.kube/config)
+    mkdir -p "$HOME/.kube"
+    cp "$tmp_kubeconfig" "$kubeconfig_dest"
+    chmod 600 "$kubeconfig_dest"
+    rm -f "$tmp_kubeconfig"
+
+    # Clean up temp file on control plane
+    ssh -i "$SSH_KEY" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        "$SSH_USER@$CONTROL_PLANE_IP" \
+        "rm -f /tmp/kubeconfig-export.yaml" >> "$DEPLOYMENT_LOG" 2>&1 || true
+
+    success "Kubeconfig saved to $kubeconfig_dest"
+    info "To use kubectl locally:"
+    echo -e "  ${CYAN}export KUBECONFIG=$kubeconfig_dest${NC}" | tee -a "$DEPLOYMENT_LOG"
+    echo -e "  ${CYAN}kubectl get nodes${NC}" | tee -a "$DEPLOYMENT_LOG"
+}
+
+# =============================================================================
 # SUMMARY AND CLEANUP
 # =============================================================================
 
@@ -681,6 +745,9 @@ main() {
     if [ ${#WORKER_IPS[@]} -gt 0 ]; then
         configure_kubectl_on_workers
     fi
+
+    # Phase 6: Set up local kubectl access
+    setup_local_kubectl
 
     # Print summary
     print_summary
