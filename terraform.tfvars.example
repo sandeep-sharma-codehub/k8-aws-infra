@@ -51,7 +51,7 @@ worker_node_volume_size   = 20   # GB
 # For manual setup: set create_key_pair=true and paste your public key below,
 # OR set create_key_pair=false and provide an existing AWS key pair name.
 create_key_pair   = true
-public_key        = ""   # Paste output of: cat ~/.ssh/your-key.pub
+public_key        = ""   # REQUIRED if create_key_pair=true: paste output of `cat ~/.ssh/your-key.pub` (bootstrap.sh fills this automatically)
 existing_key_name = ""   # Only needed if create_key_pair = false
 
 # =============================================================================
