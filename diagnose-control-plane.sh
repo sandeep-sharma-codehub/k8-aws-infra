@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 CONTROL_PLANE_IP="${1:-}"
-KEY_PATH="${2:-$HOME/.ssh/k8s-cluster.pem}"
+KEY_PATH="${2:-$HOME/.ssh/k8-cluster.pem}"
 
 if [ -z "$CONTROL_PLANE_IP" ]; then
     echo -e "${RED}Error: Control plane IP address required${NC}"
