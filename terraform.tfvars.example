@@ -1,0 +1,99 @@
+# terraform.tfvars.example
+# Copy to terraform.tfvars and customize, OR just run ./bootstrap.sh (fills values automatically)
+
+# =============================================================================
+# GENERAL CONFIGURATION
+# =============================================================================
+
+aws_region   = "us-east-1"   # Change to your preferred region
+project_name = "k8s-practice"
+environment  = "practice"
+
+# =============================================================================
+# NETWORK CONFIGURATION
+# =============================================================================
+
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+pod_cidr            = "192.168.0.0/16"
+service_cidr        = "10.96.0.0/12"
+
+# =============================================================================
+# SECURITY CONFIGURATION
+# =============================================================================
+
+# SECURITY: Replace 0.0.0.0/0 with your IP for better security: ["YOUR_IP/32"]
+# bootstrap.sh sets this to your detected public IP automatically.
+allowed_ssh_cidrs = ["0.0.0.0/0"]
+
+# =============================================================================
+# INSTANCE CONFIGURATION
+# =============================================================================
+
+ami_id = ""  # Leave empty to use latest Amazon Linux 2023
+
+control_plane_instance_type = "t3.medium"   # Minimum recommended
+worker_node_instance_type   = "t3.small"
+worker_node_count           = 2             # 1-10 workers
+
+# =============================================================================
+# STORAGE CONFIGURATION
+# =============================================================================
+
+control_plane_volume_size = 30   # GB
+worker_node_volume_size   = 20   # GB
+
+# =============================================================================
+# SSH KEY CONFIGURATION
+# =============================================================================
+
+# bootstrap.sh sets create_key_pair=true and fills public_key automatically.
+# For manual setup: set create_key_pair=true and paste your public key below,
+# OR set create_key_pair=false and provide an existing AWS key pair name.
+create_key_pair   = true
+public_key        = ""   # Paste output of: cat ~/.ssh/your-key.pub
+existing_key_name = ""   # Only needed if create_key_pair = false
+
+# =============================================================================
+# KUBERNETES CONFIGURATION
+# =============================================================================
+
+kubernetes_version = "1.30.0"
+container_runtime  = "containerd"
+cni_plugin         = "calico"
+
+# =============================================================================
+# FEATURE FLAGS
+# =============================================================================
+
+enable_audit_logging      = true
+enable_network_policies   = true
+enable_ingress_controller = true
+enable_metrics_server     = true
+
+install_additional_tools = true
+create_sample_namespaces = true
+sample_namespaces = ["frontend", "backend", "monitoring", "testing", "production"]
+
+# =============================================================================
+# COST OPTIMIZATION
+# =============================================================================
+
+enable_spot_instances               = false
+spot_instance_interruption_behavior = "terminate"
+auto_shutdown_enabled               = false
+auto_shutdown_time                  = "18:00"
+
+# =============================================================================
+# MONITORING AND LOGGING (disabled by default to reduce cost)
+# =============================================================================
+
+enable_cloudwatch_logs = false
+log_retention_days     = 7
+
+# =============================================================================
+# BACKUP (disabled by default)
+# =============================================================================
+
+enable_ebs_snapshots    = false
+snapshot_retention_days = 7
