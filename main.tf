@@ -132,7 +132,7 @@ resource "aws_security_group" "k8s_control_plane_sg" {
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = concat([var.vpc_cidr], var.allowed_ssh_cidrs)
   }
 
   # etcd server client API
