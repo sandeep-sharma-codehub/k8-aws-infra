@@ -1,0 +1,297 @@
+#!/bin/bash
+
+# bootstrap.sh - Zero-friction setup for Kubernetes CKA/CKAD practice environment
+# Usage: ./bootstrap.sh
+# Re-run safe: each step skips if already done
+
+set -euo pipefail
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+KEY_NAME="k8-cluster"
+KEY_PATH="$HOME/.ssh/${KEY_NAME}.pem"
+PUB_KEY_PATH="$HOME/.ssh/${KEY_NAME}.pub"
+KUBECONFIG_DEST="$HOME/.kube/k8s-practice-config"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# =============================================================================
+# UTILITIES
+# =============================================================================
+
+log()     { echo -e "${GREEN}✓ $1${NC}"; }
+info()    { echo -e "${BLUE}→ $1${NC}"; }
+warn()    { echo -e "${YELLOW}⚠ $1${NC}"; }
+error()   { echo -e "${RED}✗ ERROR: $1${NC}"; exit 1; }
+
+section() {
+    echo ""
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${CYAN}  $1${NC}"
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# =============================================================================
+# STEP 1: PREFLIGHT CHECKS
+# =============================================================================
+
+preflight_checks() {
+    section "Step 1/6: Preflight Checks"
+
+    local missing=()
+    for cmd in terraform aws jq ssh-keygen curl; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        error "Missing required tools: ${missing[*]}\n\nInstall them and re-run bootstrap.sh\n  macOS: brew install terraform awscli jq curl\n  Linux: see docs for your distro"
+    fi
+    log "Required tools available: terraform, aws, jq, ssh-keygen, curl"
+
+    if ! aws sts get-caller-identity &>/dev/null; then
+        error "AWS credentials not configured.\n\nRun:  aws configure\nOr set environment variables:\n  export AWS_ACCESS_KEY_ID=...\n  export AWS_SECRET_ACCESS_KEY=...\n  export AWS_REGION=..."
+    fi
+    local account_id
+    account_id=$(aws sts get-caller-identity --query Account --output text)
+    log "AWS credentials valid (Account: $account_id)"
+
+    if [ ! -f "terraform.tfvars.example" ]; then
+        error "Run bootstrap.sh from the repo root directory (terraform.tfvars.example not found)"
+    fi
+    log "Running from repo root directory"
+}
+
+# =============================================================================
+# STEP 2: SSH KEY SETUP
+# =============================================================================
+
+setup_ssh_key() {
+    section "Step 2/6: SSH Key Setup"
+
+    if [ -f "$KEY_PATH" ]; then
+        log "SSH key already exists at $KEY_PATH"
+        chmod 400 "$KEY_PATH"
+        # Regenerate public key if missing
+        if [ ! -f "$PUB_KEY_PATH" ]; then
+            ssh-keygen -y -f "$KEY_PATH" > "$PUB_KEY_PATH"
+            log "Public key regenerated at $PUB_KEY_PATH"
+        fi
+        return 0
+    fi
+
+    info "Generating new 4096-bit RSA keypair..."
+    mkdir -p "$HOME/.ssh"
+    # ssh-keygen -f path creates path (private) and path.pub (public)
+    ssh-keygen -t rsa -b 4096 -f "$KEY_PATH" -N "" -C "k8s-practice-cluster" 2>/dev/null
+    # ssh-keygen appends .pub to the -f path; rename to clean name without double extension
+    if [ -f "${KEY_PATH}.pub" ]; then
+        mv "${KEY_PATH}.pub" "$PUB_KEY_PATH"
+    fi
+    chmod 400 "$KEY_PATH"
+
+    log "SSH private key: $KEY_PATH"
+    log "SSH public key:  $PUB_KEY_PATH"
+}
+
+# =============================================================================
+# STEP 3: CONFIGURE terraform.tfvars
+# =============================================================================
+
+configure_tfvars() {
+    section "Step 3/6: Configure terraform.tfvars"
+
+    if [ -f "terraform.tfvars" ]; then
+        log "terraform.tfvars already exists — skipping (delete it to reconfigure)"
+        return 0
+    fi
+
+    info "Detecting your public IP address..."
+    local my_ip=""
+    my_ip=$(curl -s --max-time 5 https://checkip.amazonaws.com 2>/dev/null || \
+            curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
+            echo "")
+
+    local ssh_cidrs
+    if [ -n "$my_ip" ]; then
+        ssh_cidrs="[\"${my_ip}/32\"]"
+        log "SSH access will be restricted to your IP: ${my_ip}/32"
+    else
+        ssh_cidrs="[\"0.0.0.0/0\"]"
+        warn "Could not detect public IP — SSH open to 0.0.0.0/0. Update allowed_ssh_cidrs in terraform.tfvars to restrict access."
+    fi
+
+    local public_key_content
+    public_key_content=$(cat "$PUB_KEY_PATH")
+
+    # Write terraform.tfvars directly to avoid fragile sed substitutions on multiline values
+    cat > terraform.tfvars << TFVARS
+# Generated by bootstrap.sh on $(date)
+# Edit this file to customize your cluster. Re-run bootstrap.sh after changes.
+
+aws_region   = "us-east-1"
+project_name = "k8s-practice"
+environment  = "practice"
+
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+pod_cidr            = "192.168.0.0/16"
+service_cidr        = "10.96.0.0/12"
+
+allowed_ssh_cidrs = ${ssh_cidrs}
+
+ami_id                      = ""
+control_plane_instance_type = "t3.medium"
+worker_node_instance_type   = "t3.small"
+worker_node_count           = 2
+
+control_plane_volume_size = 30
+worker_node_volume_size   = 20
+
+create_key_pair   = true
+public_key        = "${public_key_content}"
+existing_key_name = ""
+
+kubernetes_version = "1.30.0"
+container_runtime  = "containerd"
+cni_plugin         = "calico"
+
+enable_audit_logging      = true
+enable_network_policies   = true
+enable_ingress_controller = true
+enable_metrics_server     = true
+
+install_additional_tools = true
+create_sample_namespaces = true
+sample_namespaces = ["frontend", "backend", "monitoring", "testing", "production"]
+
+enable_spot_instances               = false
+spot_instance_interruption_behavior = "terminate"
+auto_shutdown_enabled               = false
+auto_shutdown_time                  = "18:00"
+
+enable_cloudwatch_logs = false
+log_retention_days     = 7
+
+enable_ebs_snapshots    = false
+snapshot_retention_days = 7
+TFVARS
+
+    log "terraform.tfvars created"
+    info "Review terraform.tfvars to change region, instance types, or worker count before continuing."
+    echo ""
+    echo -e "${YELLOW}Press ENTER to continue with the default settings, or Ctrl+C to edit terraform.tfvars first.${NC}"
+    read -r
+}
+
+# =============================================================================
+# STEP 4: TERRAFORM
+# =============================================================================
+
+run_terraform() {
+    section "Step 4/6: Deploy AWS Infrastructure"
+
+    info "Initializing Terraform..."
+    terraform init -upgrade
+
+    echo ""
+    info "Planning infrastructure..."
+    terraform plan -out=tfplan
+
+    echo ""
+    echo -e "${YELLOW}The plan above will create AWS resources that cost approximately \$70-75/month.${NC}"
+    echo -e "${YELLOW}Run 'terraform destroy' when you are done to stop all charges.${NC}"
+    echo ""
+    read -p "Continue with deployment? [y/N] " -r confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        info "Deployment cancelled. Edit terraform.tfvars if needed, then re-run ./bootstrap.sh"
+        rm -f tfplan
+        exit 0
+    fi
+
+    terraform apply tfplan
+    rm -f tfplan
+    log "AWS infrastructure deployed"
+}
+
+# =============================================================================
+# STEP 5: DEPLOY KUBERNETES CLUSTER
+# =============================================================================
+
+deploy_cluster() {
+    section "Step 5/6: Deploy Kubernetes Cluster"
+
+    chmod +x deploy-cluster.sh
+
+    # Pass SSH key path explicitly so deploy-cluster.sh uses the key we generated
+    export SSH_KEY_PATH="$KEY_PATH"
+    ./deploy-cluster.sh
+}
+
+# =============================================================================
+# STEP 6: FINAL INSTRUCTIONS
+# =============================================================================
+
+print_final_instructions() {
+    section "Step 6/6: Done!"
+
+    local cp_ip=""
+    cp_ip=$(terraform output -raw control_plane_public_ip 2>/dev/null || echo "<control-plane-ip>")
+
+    echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${GREEN}║   Your Kubernetes practice cluster is ready! 🎉     ║${NC}"
+    echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [ -f "$KUBECONFIG_DEST" ]; then
+        echo -e "${BOLD}Use kubectl from your local machine:${NC}"
+        echo -e "  ${CYAN}export KUBECONFIG=$KUBECONFIG_DEST${NC}"
+        echo -e "  ${CYAN}kubectl get nodes${NC}"
+        echo ""
+    fi
+
+    echo -e "${BOLD}SSH to the control plane:${NC}"
+    echo -e "  ${CYAN}ssh -i $KEY_PATH ec2-user@${cp_ip}${NC}"
+    echo ""
+
+    echo -e "${BOLD}Use kubectl on the control plane:${NC}"
+    echo -e "  ${CYAN}ssh -i $KEY_PATH ec2-user@${cp_ip}${NC}"
+    echo -e "  ${CYAN}kubectl get nodes${NC}"
+    echo ""
+
+    echo -e "${YELLOW}IMPORTANT: Run 'terraform destroy' when done practicing to stop AWS charges.${NC}"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+main() {
+    echo ""
+    echo -e "${BOLD}${BLUE}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${BLUE}║   Kubernetes Practice Environment Bootstrap          ║${NC}"
+    echo -e "${BOLD}${BLUE}║   CKA/CKAD Practice on AWS                          ║${NC}"
+    echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    preflight_checks
+    setup_ssh_key
+    configure_tfvars
+    run_terraform
+    deploy_cluster
+    print_final_instructions
+}
+
+main "$@"
