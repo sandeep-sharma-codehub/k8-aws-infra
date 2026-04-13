@@ -122,6 +122,13 @@ configure_tfvars() {
     my_ip=$(curl -s --max-time 5 https://checkip.amazonaws.com 2>/dev/null || \
             curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
             echo "")
+    # Strip whitespace (curl responses can have trailing newlines)
+    my_ip=$(echo "$my_ip" | tr -d '[:space:]')
+    # Validate it looks like an IPv4 address before using as CIDR
+    if [[ -n "$my_ip" ]] && [[ ! "$my_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        warn "Detected IP '$my_ip' does not look like a valid IPv4 address — falling back to 0.0.0.0/0"
+        my_ip=""
+    fi
 
     local ssh_cidrs
     if [ -n "$my_ip" ]; then
@@ -134,6 +141,10 @@ configure_tfvars() {
 
     local public_key_content
     public_key_content=$(cat "$PUB_KEY_PATH")
+    # Validate public key format before embedding in heredoc
+    if [[ ! "$public_key_content" =~ ^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
+        error "Public key at $PUB_KEY_PATH does not appear to be a valid SSH public key.\nExpected format: 'ssh-rsa AAAA...' or similar.\nRun: ssh-keygen -y -f $KEY_PATH to regenerate it."
+    fi
 
     # Write terraform.tfvars directly to avoid fragile sed substitutions on multiline values
     cat > terraform.tfvars << TFVARS
@@ -202,6 +213,15 @@ TFVARS
 run_terraform() {
     section "Step 4/6: Deploy AWS Infrastructure"
 
+    # Skip if infrastructure is already deployed
+    if terraform output control_plane_public_ip &>/dev/null 2>&1; then
+        log "AWS infrastructure already deployed — skipping Terraform"
+        return 0
+    fi
+
+    # Ensure tfplan is cleaned up on unexpected exit
+    trap 'rm -f tfplan' RETURN
+
     info "Initializing Terraform..."
     terraform init -upgrade
 
@@ -244,7 +264,7 @@ deploy_cluster() {
 # =============================================================================
 
 print_final_instructions() {
-    section "Step 6/6: Done!"
+    section "Bootstrap Complete"
 
     local cp_ip=""
     cp_ip=$(terraform output -raw control_plane_public_ip 2>/dev/null || echo "<control-plane-ip>")
@@ -279,6 +299,11 @@ print_final_instructions() {
 # =============================================================================
 
 main() {
+    # Require interactive terminal (bootstrap.sh uses prompts and cannot be piped)
+    if [ ! -t 0 ]; then
+        error "bootstrap.sh requires an interactive terminal.\nDo not pipe this script: run it directly with ./bootstrap.sh"
+    fi
+
     echo ""
     echo -e "${BOLD}${BLUE}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${BLUE}║   Kubernetes Practice Environment Bootstrap          ║${NC}"
