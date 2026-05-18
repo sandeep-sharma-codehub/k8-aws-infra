@@ -297,6 +297,16 @@ resource "aws_instance" "k8s_control_plane" {
   vpc_security_group_ids      = [aws_security_group.k8s_control_plane_sg.id]
   associate_public_ip_address = true
 
+  dynamic "instance_market_options" {
+    for_each = var.enable_spot_control_plane ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        instance_interruption_behavior = "stop"
+      }
+    }
+  }
+
   root_block_device {
     volume_type = "gp3"
     volume_size = var.control_plane_volume_size
@@ -329,6 +339,16 @@ resource "aws_instance" "k8s_worker_nodes" {
   subnet_id                   = aws_subnet.k8s_public_subnet[count.index % length(aws_subnet.k8s_public_subnet)].id
   vpc_security_group_ids      = [aws_security_group.k8s_worker_sg.id]
   associate_public_ip_address = true
+
+  dynamic "instance_market_options" {
+    for_each = var.enable_spot_instances ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        instance_interruption_behavior = var.spot_instance_interruption_behavior
+      }
+    }
+  }
 
   root_block_device {
     volume_type = "gp3"

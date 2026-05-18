@@ -271,7 +271,13 @@ variable "enable_metrics_server" {
 # =============================================================================
 
 variable "enable_spot_instances" {
-  description = "Use spot instances for worker nodes (cost optimization)"
+  description = "Use spot instances for worker nodes (cost optimization, ~60-70% cheaper)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_spot_control_plane" {
+  description = "Use spot instance for control plane (saves cost but risks cluster downtime on interruption)"
   type        = bool
   default     = false
 }
